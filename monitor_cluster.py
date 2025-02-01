@@ -97,7 +97,7 @@ def process_pod(namespace, pod):
         issues.append({"source": "dmesg", "logs": filtered_dmesg.split("\n")})
 
     # Check logs from celery.log
-    celery_logs = check_logs(namespace, pod, "tail -n 10 /home/faraday/.faraday/logs/celery.log 2>/dev/null")
+    celery_logs = check_logs(namespace, pod, "tail -n 10 /home/*/*/logs/celery.log 2>/dev/null")
     filtered_celery = "\n".join(
         line for line in celery_logs.split("\n")
         if re.search(r"oom|111|closed|error|failed|critical|at", line, re.IGNORECASE) and "CPendingDeprecationWarning" not in line
