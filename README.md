@@ -2,13 +2,13 @@ Here’s a **description**, **name**, and **dependencies** for your Kubernetes m
 
 ---
 
-### **KubePulse**
+### **KubeSeek**
 
 ---
 
-**KubePulse** is a sleek, real-time Kubernetes monitoring dashboard designed to provide DevOps teams with a clear and actionable view of their cluster's health. Inspired by the need for simplicity and efficiency, KubePulse offers a **table-based interface** with color-coded status indicators, making it easy to identify healthy nodes and namespaces at a glance. With features like **auto-refresh**, **status buttons**, and **detailed error messages**, KubePulse ensures that you stay on top of your cluster's performance without unnecessary complexity.
+**KubeSeek* is a sleek, real-time Kubernetes monitoring dashboard designed to provide DevOps teams with a clear and actionable view of their cluster's health. Inspired by the need for simplicity and efficiency, KubeSeek offers a **table-based interface** with color-coded status indicators, making it easy to identify healthy nodes and namespaces at a glance. With features like **auto-refresh**, **status buttons**, and **detailed error messages**, KubeSeek ensures that you stay on top of your cluster's performance without unnecessary complexity.
 
-Whether you're managing a small development cluster or a large-scale production environment, KubePulse delivers the insights you need to maintain reliability and uptime. Its intuitive design, powered by **Flask** and **kubectl**, makes it a must-have tool for Kubernetes administrators and developers alike.
+Whether you're managing a small development cluster or a large-scale production environment, KubSeek delivers the insights you need to maintain reliability and uptime. Its intuitive design, powered by **Flask** and **kubectl**, makes it a must-have tool for Kubernetes administrators and developers alike.
 
 ---
 
@@ -75,7 +75,7 @@ Whether you're managing a small development cluster or a large-scale production 
 
 ---
 
-### **How to Run KubePulse**
+### **How to Run KubeSeek**
 
 1. **Install Dependencies**:
    ```bash
@@ -103,7 +103,7 @@ Whether you're managing a small development cluster or a large-scale production 
 
 ### **Example Use Case**
 
-Imagine you’re managing a Kubernetes cluster with dozens of nodes and namespaces. With **KubePulse**, you can:
+Imagine you’re managing a Kubernetes cluster with dozens of nodes and namespaces. With **KubeSeek**, you can:
 - Quickly identify unhealthy nodes or namespaces using the **color-coded status buttons**.
 - View detailed error messages to troubleshoot issues.
 - Refresh the dashboard with a single click to get the latest status updates.
@@ -111,11 +111,11 @@ Imagine you’re managing a Kubernetes cluster with dozens of nodes and namespac
 
 ---
 
-### **Why Choose KubePulse?**
+### **Why Choose KubeSeek?**
 - **Simple and Intuitive**: No complex setup or steep learning curve.
 - **Real-Time Insights**: Stay updated on your cluster's health in real time.
 - **Customizable**: Easily extend the tool to monitor additional resources or integrate with other systems.
 
 ---
 
-Let me know if you’d like help setting up or extending **KubePulse**! 😊
+Let me know if you’d like help setting up or extending **KubeSeek**! 😊
