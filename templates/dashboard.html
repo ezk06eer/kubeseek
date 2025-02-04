@@ -4,126 +4,186 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kubernetes Monitoring Dashboard</title>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        :root {
+          --min-item-width: 20ch; /* Reduced width for a more condensed layout */
+          --max-item-width: .5fr;
+          --grid-spacing: .1rem; /* Reduced spacing */
+          --item-padding: .1rem; /* Reduced padding */
+        }
+
+        /* Let items expand on small screens */
+        @media (max-width: 600px) {
+          :root {
+            --max-item-width: 1fr;
+          }
+        }
+
+        /* Cap item width for better appearance on large screens */
+        @media (min-width: 2560px) {
+          :root {
+            --max-item-width: 250px; /* Slightly smaller for large screens */
+          }
+        }
+
+        /* Dark mode styling */
         body {
-            font-family: Tahoma, sans-serif;
-            background-color: #f4f4f4;
+            background-color: #1e1e1e;
+            color: #f1f1f1;
+            font-family: "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            font-size: 12px; /* Smaller font size */
+            font-weight: normal; /* Non-bold typography */
             margin: 0;
-            padding: 20px;
-            line-height: 1.6;
+            padding: 10px; /* Reduced padding */
         }
+
         h1 {
-            color: #333;
-            margin-bottom: 20px;
-            font-size: 2em;
+            color: #f1f1f1;
+            margin-bottom: 10px; /* Reduced margin */
+            font-size: 1.5em; /* Smaller heading */
+            font-weight: normal; /* Non-bold */
         }
-        table {
+
+        h2 {
+            color: #f1f1f1;
+            margin-bottom: 10px; /* Reduced margin */
+            font-size: 1.2em; /* Smaller subheading */
+            font-weight: normal; /* Non-bold */
+        }
+
+        .container {
+            max-width: 98%;
+        }
+
+        .monitor-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(var(--min-item-width), var(--max-item-width)));
+            grid-gap: var(--grid-spacing);
+            margin-bottom: 1rem; /* Reduced margin */
+        }
+
+        .item {
             width: 100%;
-            border-collapse: collapse;
-            background-color: #fff;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        th, td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background-color: #007bff;
-            color: #fff;
-            font-weight: bold;
-        }
-        tr:hover {
-            background-color: #f1f1f1;
-        }
-        .status-button {
-            padding: 6px 12px;
-            border-radius: 4px;
-            color: #fff;
-            font-weight: bold;
+            padding: var(--item-padding) !important;
+            border: #3d3d3d solid 1px; /* Thinner border */
+            border-radius: 4px; /* Smaller border radius */
+            background-color: #2d2d2d;
             text-align: center;
+        }
+
+        .item-name {
+            color: #f1f1f1;
+            font-size: 1em; /* Smaller font size */
+            margin-bottom: 5px; /* Reduced margin */
+        }
+
+        .status {
+            font-size: 0.9em; /* Smaller font size */
+            font-weight: normal; /* Non-bold */
+            padding: 4px 8px; /* Reduced padding */
+            border-radius: 2px; /* Smaller border radius */
             display: inline-block;
-            min-width: 80px;
         }
-        .status-button.ok {
-            background-color: #4caf50; /* Green for 200 - OK */
+
+        .status.ok {
+            background-color: #4caf50; /* Green for healthy */
         }
-        .status-button.error {
-            background-color: #f44336; /* Red for errors */
+
+        .status.error {
+            background-color: #f44336; /* Red for issues */
         }
+
         .refresh-button {
-            margin-bottom: 25px;
-            padding: 12px 24px;
+            margin-bottom: 15px; /* Reduced margin */
+            padding: 8px 16px; /* Smaller button */
             background-color: #007bff;
             color: #fff;
             border: none;
-            border-radius: 4px;
+            border-radius: 2px; /* Smaller border radius */
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em; /* Smaller font size */
+            font-weight: normal; /* Non-bold */
             transition: background-color 0.3s;
         }
+
         .refresh-button:hover {
             background-color: #0056b3;
+        }
+
+        .fas {
+            margin-right: 5px; /* Reduced spacing */
+        }
+        /* Update status colors */
+        .status.ok { background-color: #4caf50; }  /* Green for 200 */
+        .status.error { background-color: #f44336; }  /* Red for 502 */
+
+        /* Add tooltip for error details */
+        .error-details {
+            font-size: 0.8em;
+            color: #ff9999;
+            margin-top: 4px;
         }
     </style>
 </head>
 <body>
-    <h1>Kubernetes Monitoring Dashboard</h1>
-    <button class="refresh-button" onclick="refreshDashboard()">Refresh</button>
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>DateTime</th>
-                <th>Message</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% if health_data.nodes %}
-                {% for node, status in health_data.nodes.items() %}
-                    <tr>
-                        <td>{{ node }}</td>
-                        <td>
-                            <span class="status-button {% if status.status == 200 %}ok{% else %}error{% endif %}">
-                                {% if status.status == 200 %}200 - OK{% else %}Error{% endif %}
-                            </span>
-                        </td>
-                        <td>{{ status.timestamp }}</td>
-                        <td>{{ status.message }}</td>
-                    </tr>
-                {% endfor %}
-            {% else %}
-                <tr>
-                    <td colspan="4">No node data available.</td>
-                </tr>
-            {% endif %}
-            {% if health_data.namespaces %}
-                {% for namespace, status in health_data.namespaces.items() %}
-                    <tr>
-                        <td>{{ namespace }}</td>
-                        <td>
-                            <span class="status-button {% if status.status == 200 %}ok{% else %}error{% endif %}">
-                                {% if status.status == 200 %}200 - OK{% else %}Error{% endif %}
-                            </span>
-                        </td>
-                        <td>{{ status.timestamp }}</td>
-                        <td>{{ status.message }}</td>
-                    </tr>
-                {% endfor %}
-            {% else %}
-                <tr>
-                    <td colspan="4">No namespace data available.</td>
-                </tr>
-            {% endif %}
-        </tbody>
-    </table>
+    <h1><i class="fas fa-heartbeat"></i> Kubernetes Monitoring Dashboard</h1>
+    <button class="refresh-button" onclick="refreshDashboard()">
+        <i class="fas fa-sync-alt"></i> Refresh
+    </button>
 
+    <!-- Nodes Section -->
+    <div class="container">
+        <h2><i class="fas fa-server"></i> Nodes</h2>
+        <div class="monitor-list">
+            {% for node, status in health_data.nodes.items() %}
+                <div class="item">
+                    <div class="item-name">{{ node }}</div>
+                    <div class="status {% if status.status == 200 %}ok{% else %}error{% endif %}">
+                        {% if status.status == 200 %}
+                            <i class="fas fa-check-circle"></i> Healthy
+                        {% else %}
+                            <i class="fas fa-times-circle"></i> Issue
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Namespaces Section -->
+    <!-- Namespaces Section -->
+    <div class="container">
+        <h2><i class="fas fa-layer-group"></i> Namespaces</h2>
+        <div class="monitor-list">
+            {% for namespace, status in health_data.namespaces.items() %}
+                <div class="item">
+                    <div class="item-name">{{ namespace }}</div>
+                    <div class="status {% if status.status == 200 %}ok{% else %}error{% endif %}">
+                        {% if status.status == 200 %}
+                            <i class="fas fa-check-circle"></i> {{ status.message }}
+                        {% else %}
+                            <i class="fas fa-times-circle"></i> {{ status.message }}
+                        {% endif %}
+                    </div>
+                    <!-- Show error details if present -->
+                    {% if status.status != 200 %}
+                        <div class="error-details">
+                            {% if status.unhealthy_pods %}
+                                Pods with issues: {{ status.unhealthy_pods|join(', ') }}
+                            {% endif %}
+                            {% if status.log_issues %}
+                                (Log errors detected)
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
     <script>
         function refreshDashboard() {
-            // Reload the page to fetch fresh data
             window.location.reload();
         }
     </script>
