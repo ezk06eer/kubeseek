@@ -30,7 +30,8 @@ namespace_status = {}
 def get_status():
     """Endpoint to get the current status of namespaces."""
     logger.info("GET request received for /status endpoint")
-    return jsonify(namespace_status)
+    response = { "namespaces": namespace_status }
+    return jsonify(response)
 
 
 @app.route("/health", methods=["GET"])
@@ -134,69 +135,87 @@ def check_node_health(node):
 
 
 def check_namespace_health(namespace):
-    """Check the health of a namespace by verifying pod statuses."""
+    """Check the health of a namespace by verifying pod statuses and logs."""
     logger.info(f"Checking health for namespace: {namespace}")
     try:
+        # Check for pods in failed states
         output = run_kubectl_command([
             "kubectl", "get", "pods", "-n", namespace,
             "--field-selector=status.phase!=Running,status.phase!=Succeeded",
             "-o", "json"
         ])
         pod_info = json.loads(output)
-        if len(pod_info.get("items", [])) == 0:
-            logger.info(f"Namespace {namespace} is healthy")
-            return {"status": 200, "message": "Namespace is healthy"}
-        else:
+
+        if len(pod_info.get("items", [])) > 0:
             unhealthy_pods = [pod["metadata"]["name"] for pod in pod_info["items"]]
             logger.warning(f"Namespace {namespace} has unhealthy pods: {unhealthy_pods}")
             return {
-                "status": 500,
+                "status": 502,
                 "message": "Some pods are not in a healthy state",
                 "unhealthy_pods": unhealthy_pods
             }
+
+        # Check logs of running pods
+        pods = get_pods(namespace)
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(process_pod, repeat(namespace), pods))
+
+        # Collect pods with log issues
+        log_issues = [result for result in results if result is not None]
+        if log_issues:
+            unhealthy_pods = [issue["pod"] for issue in log_issues]
+            logger.warning(f"Namespace {namespace} has pods with log errors: {unhealthy_pods}")
+            return {
+                "status": 502,
+                "message": "Some pods have errors in logs",
+                "unhealthy_pods": unhealthy_pods,
+                "log_issues": log_issues
+            }
+
+        logger.info(f"Namespace {namespace} is healthy")
+        return {"status": 200, "message": "Namespace is healthy"}
+
     except Exception as e:
         logger.error(f"Error checking namespace health for {namespace}: {str(e)}")
         return {"status": 500, "message": str(e)}
 
 
 def process_pod(namespace, pod):
-    """Process a pod to check for issues in logs (only for non-completed pods)."""
+    """Process a pod to check for issues in logs."""
     logger.debug(f"Processing pod {pod} in namespace {namespace}")
     try:
-        # First check if pod is in running state
+        # Verify pod is actually running
         status = run_kubectl_command([
             "kubectl", "get", "pod", "-n", namespace, pod,
             "-o", "jsonpath={.status.phase}"
         ])
-        if status == "Succeeded":
-            logger.debug(f"Skipping completed pod: {namespace}/{pod}")
+        if status != "Running":
+            logger.debug(f"Skipping non-running pod: {namespace}/{pod} ({status})")
             return None
 
         issues = []
 
-        # Check logs using dmesg (for all pods)
-        dmesg_logs = check_logs(namespace, pod, "dmesg 2>/dev/null")
+        # Check dmesg logs
+        dmesg_logs = check_logs(namespace, pod, "dmesg -T")
+        error_pattern = r"oom|failed|critical|server 127\.0\.0\.1 not responding, timed out"
         filtered_dmesg = "\n".join(
             line for line in dmesg_logs.split("\n")
-            if re.search(r"oom|failed|critical", line, re.IGNORECASE) and "GPT" not in line
+            if re.search(error_pattern, line, re.IGNORECASE) and "GPT" not in line
         )
         if filtered_dmesg:
             logger.info(f"Found dmesg issues in {namespace}/{pod}")
             issues.append({"source": "dmesg", "logs": filtered_dmesg.split("\n")})
 
-        # Skip celery.log check for Redis pods
+        # Check celery logs for non-Redis pods
         if "redis" not in pod.lower():
-            # Check logs from celery.log (non-Redis pods only)
-            celery_logs = check_logs(namespace, pod, "tail -n 10 /home/faraday/.faraday/logs/celery.log 2>/dev/null")
-            filtered_celery = "\n".join(
-                line for line in celery_logs.split("\n")
-                if re.search(r"oom|111", line, re.IGNORECASE) and "CPendingDeprecationWarning" not in line
-            )
-            if filtered_celery:
+            celery_logs = check_logs(namespace, pod, "tail -n10 /home/faraday/.faraday/logs/celery.log")
+            if re.search(r"oom|111|timeout", celery_logs, re.IGNORECASE):
+                filtered_celery = "\n".join(
+                    line for line in celery_logs.split("\n")
+                    if re.search(r"oom|111|timeout", line, re.IGNORECASE)
+                )
                 logger.info(f"Found celery.log issues in {namespace}/{pod}")
                 issues.append({"source": "celery.log", "logs": filtered_celery.split("\n")})
-        else:
-            logger.debug(f"Skipping celery.log check for Redis pod: {namespace}/{pod}")
 
         if issues:
             return {
@@ -205,6 +224,7 @@ def process_pod(namespace, pod):
                 "issues": issues
             }
         return None
+
     except Exception as e:
         logger.error(f"Error processing pod {namespace}/{pod}: {str(e)}")
         return None
@@ -224,17 +244,14 @@ def monitor_cluster():
 
             # Check node health
             with ThreadPoolExecutor() as executor:
-                logger.debug("Checking node health")
                 node_health = dict(zip(nodes, executor.map(check_node_health, nodes)))
 
-            # Check namespace health
+            # Check namespace health (now includes log checking)
             with ThreadPoolExecutor() as executor:
-                logger.debug("Checking namespace health")
                 namespace_status = dict(zip(namespaces, executor.map(check_namespace_health, namespaces)))
 
-            # Process pods
+            # Process pods for detailed status data
             with ThreadPoolExecutor() as executor:
-                logger.debug("Processing pods")
                 for namespace in namespaces:
                     pods = get_pods(namespace)
                     results = executor.map(process_pod, repeat(namespace), pods)
@@ -243,10 +260,11 @@ def monitor_cluster():
             status_data = data
             logger.info("Completed monitoring cycle")
             time.sleep(60)
+
         except Exception as e:
             logger.critical(f"Critical error in monitoring thread: {str(e)}")
             logger.error(traceback.format_exc())
-            time.sleep(60)  # Prevent tight loop on critical errors
+            time.sleep(60)
 
 
 def start_monitoring():
