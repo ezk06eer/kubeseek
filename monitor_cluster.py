@@ -1,262 +1,165 @@
-import subprocess
-import json
-import re
-import logging
-from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
 from flask import Flask, jsonify
+from kubernetes import client, config
+from concurrent.futures import ThreadPoolExecutor
 import threading
+import logging
 import time
-import traceback
+import re
 
-# Configure logging
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('kubeseek.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler(), logging.FileHandler('kubeseek.log')]
 )
 logger = logging.getLogger(__name__)
 
+# Flask app
 app = Flask(__name__)
+
+# Shared state
 status_data = []
 node_health = {}
 namespace_status = {}
 
+# Kubernetes setup
+try:
+    config.load_incluster_config()
+except:
+    config.load_kube_config()
+v1 = client.CoreV1Api()
 
-@app.route("/status", methods=["GET"])
+@app.route("/status")
 def get_status():
-    """Endpoint to get the current status of namespaces."""
-    logger.info("GET request received for /status endpoint")
+    logger.info("GET /status")
     return jsonify(namespace_status)
 
-
-@app.route("/health", methods=["GET"])
+@app.route("/health")
 def get_health():
-    """Endpoint to get the health of nodes and namespaces."""
-    logger.info("GET request received for /health endpoint")
-    response = {
-        "nodes": node_health,
-        "namespaces": namespace_status
-    }
-    return jsonify(response)
-
-
-def run_kubectl_command(command):
-    """Run a kubectl command and return the output."""
-    logger.debug(f"Executing command: {' '.join(command)}")
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"Command failed: {result.stderr.strip()}")
-            raise RuntimeError(f"Command failed: {result.stderr}")
-        return result.stdout.strip()
-    except Exception as e:
-        logger.error(f"Error executing command: {str(e)}")
-        logger.debug(traceback.format_exc())
-        raise
-
+    logger.info("GET /health")
+    return jsonify({"nodes": node_health, "namespaces": namespace_status})
 
 def get_namespaces():
-    """Get all namespaces starting with 'client'."""
     logger.info("Fetching namespaces")
-    try:
-        output = run_kubectl_command(["kubectl", "get", "namespaces", "-o", "jsonpath={.items[*].metadata.name}"])
-        namespaces = [ns for ns in output.split() if ns.startswith("client")]
-        logger.debug(f"Found namespaces: {namespaces}")
-        return namespaces
-    except Exception as e:
-        logger.error(f"Error fetching namespaces: {str(e)}")
-        return []
-
-
-def get_pods(namespace):
-    """Get all pods in a namespace that are not in the 'Succeeded' phase."""
-    logger.debug(f"Fetching pods for namespace: {namespace}")
-    try:
-        output = run_kubectl_command(
-            ["kubectl", "get", "pods", "-n", namespace,
-             "--field-selector=status.phase!=Succeeded",
-             "-o", "jsonpath={.items[*].metadata.name}"]
-        )
-        pods = output.split()
-        logger.debug(f"Found {len(pods)} pods in namespace {namespace}")
-        return pods
-    except Exception as e:
-        logger.error(f"Error fetching pods for namespace {namespace}: {str(e)}")
-        return []
-
+    return [
+        ns.metadata.name for ns in v1.list_namespace().items
+        if ns.metadata.name.startswith("client")
+    ]
 
 def get_nodes():
-    """Get all nodes in the cluster."""
     logger.info("Fetching nodes")
+    return [node.metadata.name for node in v1.list_node().items]
+
+def get_pods(namespace: str):
     try:
-        output = run_kubectl_command(["kubectl", "get", "nodes", "-o", "jsonpath={.items[*].metadata.name}"])
-        nodes = output.split()
-        logger.debug(f"Found nodes: {nodes}")
-        return nodes
+        return [
+            pod.metadata.name for pod in v1.list_namespaced_pod(
+                namespace=namespace
+            ).items if pod.status.phase != "Succeeded"
+        ]
     except Exception as e:
-        logger.error(f"Error fetching nodes: {str(e)}")
+        logger.warning(f"Failed to get pods in {namespace}: {e}")
         return []
 
-
-def check_logs(namespace, pod, command):
-    """Check logs for a specific pod using a command."""
-    logger.debug(f"Checking logs for {namespace}/{pod} with command: {command}")
+def check_node_health(node: str):
     try:
-        output = run_kubectl_command(["kubectl", "exec", "-n", namespace, pod, "--"] + command.split())
-        return output.strip()
+        node_obj = v1.read_node_status(node)
+        for condition in node_obj.status.conditions:
+            if condition.type == "Ready":
+                return {"status": 200 if condition.status == "True" else 500, "message": condition.reason}
     except Exception as e:
-        logger.warning(f"Failed to check logs for {namespace}/{pod}: {str(e)}")
+        return {"status": 500, "message": str(e)}
+
+def check_namespace_health(namespace: str):
+    try:
+        pods = v1.list_namespaced_pod(namespace=namespace).items
+        unhealthy = [
+            pod.metadata.name for pod in pods
+            if pod.status.phase not in ("Running", "Succeeded")
+        ]
+        return {
+            "status": 200 if not unhealthy else 500,
+            "message": "Namespace is healthy" if not unhealthy else "Some pods are unhealthy",
+            "unhealthy_pods": unhealthy or []
+        }
+    except Exception as e:
+        return {"status": 500, "message": str(e)}
+
+def check_logs(namespace: str, pod: str, container: str, command: list):
+    try:
+        return v1.read_namespaced_pod_log(
+            name=pod,
+            namespace=namespace,
+            container=container,
+            tail_lines=100,
+            _preload_content=True
+        )
+    except Exception as e:
         return str(e)
 
-
-def check_node_health(node):
-    """Check the health of a node."""
-    logger.info(f"Checking health for node: {node}")
+def process_pod(namespace: str, pod_name: str):
+    logger.info(f"Processing pod {namespace}/{pod_name}")
     try:
-        output = run_kubectl_command(["kubectl", "get", "node", node, "-o", "json"])
-        node_info = json.loads(output)
-        conditions = node_info["status"]["conditions"]
-        ready_condition = next((c for c in conditions if c["type"] == "Ready"), None)
-
-        if ready_condition and ready_condition["status"] == "True":
-            logger.info(f"Node {node} is healthy")
-            return {"status": 200, "message": "Node is healthy"}
-        else:
-            logger.warning(f"Node {node} is not ready")
-            return {"status": 500, "message": "Node is not ready"}
-    except Exception as e:
-        logger.error(f"Error checking node health for {node}: {str(e)}")
-        return {"status": 500, "message": str(e)}
-
-
-def check_namespace_health(namespace):
-    """Check the health of a namespace by verifying pod statuses."""
-    logger.info(f"Checking health for namespace: {namespace}")
-    try:
-        output = run_kubectl_command([
-            "kubectl", "get", "pods", "-n", namespace,
-            "--field-selector=status.phase!=Running,status.phase!=Succeeded",
-            "-o", "json"
-        ])
-        pod_info = json.loads(output)
-        if len(pod_info.get("items", [])) == 0:
-            logger.info(f"Namespace {namespace} is healthy")
-            return {"status": 200, "message": "Namespace is healthy"}
-        else:
-            unhealthy_pods = [pod["metadata"]["name"] for pod in pod_info["items"]]
-            logger.warning(f"Namespace {namespace} has unhealthy pods: {unhealthy_pods}")
-            return {
-                "status": 500,
-                "message": "Some pods are not in a healthy state",
-                "unhealthy_pods": unhealthy_pods
-            }
-    except Exception as e:
-        logger.error(f"Error checking namespace health for {namespace}: {str(e)}")
-        return {"status": 500, "message": str(e)}
-
-
-def process_pod(namespace, pod):
-    """Process a pod to check for issues in logs (only for non-completed pods)."""
-    logger.debug(f"Processing pod {pod} in namespace {namespace}")
-    try:
-        # First check if pod is in running state
-        status = run_kubectl_command([
-            "kubectl", "get", "pod", "-n", namespace, pod,
-            "-o", "jsonpath={.status.phase}"
-        ])
-        if status == "Succeeded":
-            logger.debug(f"Skipping completed pod: {namespace}/{pod}")
+        pod = v1.read_namespaced_pod(pod_name, namespace)
+        if pod.status.phase == "Succeeded":
             return None
 
         issues = []
+        containers = [c.name for c in pod.spec.containers]
 
-        # Check logs using dmesg (for all pods)
-        dmesg_logs = check_logs(namespace, pod, "dmesg -T")
-        filtered_dmesg = "\n".join(
-            line for line in dmesg_logs.split("\n")
-            if re.search(r"oom|failed|critical", line, re.IGNORECASE) and "GPT" not in line
-        )
-        if filtered_dmesg:
-            logger.info(f"Found dmesg issues in {namespace}/{pod}")
-            issues.append({"source": "dmesg", "logs": filtered_dmesg.split("\n")})
+        for container in containers:
+            log = check_logs(namespace, pod_name, container, [])
+            dmesg_lines = [
+                line for line in log.splitlines()
+                if re.search(r"oom|failed|critical", line, re.IGNORECASE) and "GPT" not in line
+            ]
+            if dmesg_lines:
+                issues.append({"source": "dmesg", "logs": dmesg_lines})
 
-        # Skip celery.log check for Redis pods
-        if "redis" not in pod.lower():
-            # Check logs from celery.log (non-Redis pods only)
-            celery_logs = check_logs(namespace, pod, "tail -n 10 /home/faraday/.faraday/logs/celery.log")
-            filtered_celery = "\n".join(
-                line for line in celery_logs.split("\n")
-                if re.search(r"oom|111", line, re.IGNORECASE) and "CPendingDeprecationWarning" not in line
-            )
-            if filtered_celery:
-                logger.info(f"Found celery.log issues in {namespace}/{pod}")
-                issues.append({"source": "celery.log", "logs": filtered_celery.split("\n")})
-        else:
-            logger.debug(f"Skipping celery.log check for Redis pod: {namespace}/{pod}")
+            if "redis" not in pod_name.lower():
+                celery_logs = [
+                    line for line in log.splitlines()
+                    if re.search(r"111", line) and "CPendingDeprecationWarning" not in line
+                ]
+                if celery_logs:
+                    issues.append({"source": "celery.log", "logs": celery_logs})
 
         if issues:
-            return {
-                "namespace": namespace,
-                "pod": pod,
-                "issues": issues
-            }
+            return {"namespace": namespace, "pod": pod_name, "issues": issues}
         return None
     except Exception as e:
-        logger.error(f"Error processing pod {namespace}/{pod}: {str(e)}")
+        logger.error(f"Error in pod {namespace}/{pod_name}: {e}")
         return None
 
-
 def monitor_cluster():
-    """Monitor the cluster and update status data."""
-    logger.info("Starting cluster monitoring thread")
     global status_data, node_health, namespace_status
+    logger.info("Starting monitoring loop")
 
     while True:
         try:
-            logger.info("Starting monitoring cycle")
-            data = []
             namespaces = get_namespaces()
             nodes = get_nodes()
 
-            # Check node health
             with ThreadPoolExecutor() as executor:
-                logger.debug("Checking node health")
-                node_health = dict(zip(nodes, executor.map(check_node_health, nodes)))
+                node_health.update(dict(zip(nodes, executor.map(check_node_health, nodes))))
+                namespace_status.update(dict(zip(namespaces, executor.map(check_namespace_health, namespaces))))
 
-            # Check namespace health
-            with ThreadPoolExecutor() as executor:
-                logger.debug("Checking namespace health")
-                namespace_status = dict(zip(namespaces, executor.map(check_namespace_health, namespaces)))
+                all_results = []
+                for ns in namespaces:
+                    pods = get_pods(ns)
+                    results = list(executor.map(lambda p: process_pod(ns, p), pods))
+                    all_results.extend(filter(None, results))
 
-            # Process pods
-            with ThreadPoolExecutor() as executor:
-                logger.debug("Processing pods")
-                for namespace in namespaces:
-                    pods = get_pods(namespace)
-                    results = executor.map(process_pod, repeat(namespace), pods)
-                    data.extend(filter(None, results))
-
-            status_data = data
-            logger.info("Completed monitoring cycle")
-            time.sleep(60)
+            status_data = all_results
+            logger.info("Cluster monitoring cycle complete")
         except Exception as e:
-            logger.critical(f"Critical error in monitoring thread: {str(e)}")
-            logger.error(traceback.format_exc())
-            time.sleep(60)  # Prevent tight loop on critical errors
-
+            logger.error(f"Monitor loop error: {e}")
+        time.sleep(60)
 
 def start_monitoring():
-    """Start the monitoring thread."""
-    logger.info("Initializing monitoring thread")
-    monitoring_thread = threading.Thread(target=monitor_cluster, daemon=True)
-    monitoring_thread.start()
-
+    threading.Thread(target=monitor_cluster, daemon=True).start()
 
 if __name__ == "__main__":
-    logger.info("Starting KubeSeek application")
+    logger.info("Starting KubeSeek using Kubernetes Python client")
     start_monitoring()
     app.run(host="0.0.0.0", port=5001)
