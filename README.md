@@ -22,6 +22,12 @@ Whether you're managing a small development cluster or a large-scale production 
 
 ---
 
+### **Screenshots** 
+
+<img width="1689" height="629" alt="screenshot kubeseek" src="https://github.com/user-attachments/assets/6197533f-b139-48e6-b285-a4fec9057de1" />
+
+---
+
 ### **Tool Dependencies**
 
 #### **Core Dependencies**
