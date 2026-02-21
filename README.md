@@ -1,6 +1,4 @@
-Here’s a **description**, **name**, and **dependencies** for your Kubernetes monitoring tool:
 
----
 
 ### **KubeSeek**
 
