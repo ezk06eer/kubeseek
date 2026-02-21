@@ -120,6 +120,4 @@ Imagine you’re managing a Kubernetes cluster with dozens of nodes and namespac
 - **Real-Time Insights**: Stay updated on your cluster's health in real time.
 - **Customizable**: Easily extend the tool to monitor additional resources or integrate with other systems.
 
----
 
-Let me know if you’d like help setting up or extending **KubeSeek**! 😊
